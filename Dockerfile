@@ -32,8 +32,8 @@ COPY static/ static/
 COPY templates/ templates/
 COPY test_openai_connectivity.py .
 COPY patched_edge_tts/ patched_edge_tts/
-COPY uploads/ uploads/
 ENV PYTHONPATH=/app
 
 EXPOSE 8000
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+
