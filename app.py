@@ -1,13 +1,3 @@
-import aiohttp
-import ssl
-
-# Monkey-patch aiohttp globally to disable SSL verification
-old_tcp_connector = aiohttp.TCPConnector
-class NoVerifyTCPConnector(aiohttp.TCPConnector):
-    def __init__(self, *args, **kwargs):
-        kwargs['ssl'] = False
-        super().__init__(*args, **kwargs)
-aiohttp.TCPConnector = NoVerifyTCPConnector
 import os
 import time
 import json
@@ -39,67 +29,29 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
 
 import aiohttp
-from  patched_edge_tts import edge_tts  # Use patched version to disable SSL verify
+from patched_edge_tts import edge_tts  # Use patched version to disable SSL verify
 
-# -----------------------------
-# Env & basic configuration
-# -----------------------------
-load_dotenv()
-os.environ.setdefault("SSL_CERT_FILE", certifi.where())
-os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-if not OPENAI_API_KEY or not ELEVENLABS_API_KEY:
-    raise ValueError("Missing OPENAI_API_KEY or ELEVENLABS_API_KEY in .env")
 
-# Point pytesseract at a default path (override with TESSERACT_CMD if needed)
-pytesseract.pytesseract.tesseract_cmd = os.getenv("TESSERACT_CMD", "/usr/bin/tesseract")
+## ---- Globals & Utilities (files / OCR / split) ----
 
-# -----------------------------
-# FastAPI app
-# -----------------------------
+# FastAPI app setup
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key=os.urandom(24))
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# -----------------------------
-# Globals
-# -----------------------------
+
+
 UPLOAD_FOLDER = "uploads"
 DIAGRAM_FOLDER = "static/diagrams"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(DIAGRAM_FOLDER, exist_ok=True)
 ALLOWED_EXTENSIONS = {'pdf', 'docx', 'xlsx', 'txt', 'jpg', 'jpeg', 'png', 'tif'}
 
-# Embeddings / Vector store
-
 global_embeddings = OpenAIEmbeddings()
 global_vector_store = None
 
-# Reload all documents from uploads/ into the vector store on startup
-def reload_documents():
-    global global_vector_store
-    if not os.path.exists(UPLOAD_FOLDER):
-        return
-    files = [f for f in os.listdir(UPLOAD_FOLDER) if allowed_file(f)]
-    all_chunks = []
-    for filename in files:
-        file_path = os.path.join(UPLOAD_FOLDER, filename)
-        ext = filename.rsplit('.', 1)[-1].lower()
-        text = extract_text(file_path, ext)
-        if text and not text.startswith("Error"):
-            chunks = split_text(text)
-            all_chunks.extend(chunks)
-    if all_chunks:
-        global_vector_store = FAISS.from_texts(all_chunks, global_embeddings)
-
-reload_documents()
-
-# -----------------------------
-# Utilities (files / OCR / split)
-# -----------------------------
 def allowed_file(filename: str) -> bool:
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -144,6 +96,23 @@ def extract_images_from_pdf(pdf_path: str):
         paths.append(out)
     return paths
 
+def reload_documents():
+    global global_vector_store
+    if not os.path.exists(UPLOAD_FOLDER):
+        return
+    files = [f for f in os.listdir(UPLOAD_FOLDER) if allowed_file(f)]
+    all_chunks = []
+    for filename in files:
+        file_path = os.path.join(UPLOAD_FOLDER, filename)
+        ext = filename.rsplit('.', 1)[-1].lower()
+        text = extract_text(file_path, ext)
+        if text and not text.startswith("Error"):
+            chunks = split_text(text)
+            all_chunks.extend(chunks)
+    if all_chunks:
+        global_vector_store = FAISS.from_texts(all_chunks, global_embeddings)
+
+reload_documents()
 # -----------------------------
 # ElevenLabs TTS
 # -----------------------------
@@ -236,14 +205,40 @@ async def _ws_keepalive(ws: WebSocket, interval: int = 20):
 async def get_voices():
     return {
         "voices": [
-            {"id": "edge:en-US-AriaNeural", "name": "Edge - Aria (FREE)", "cost_per_1000_chars": 0},
-            {"id": "elevenlabs:Aria", "name": "ElevenLabs - Aria", "cost_per_1000_chars": 0.3},
+            {"id": "edge:en-US-AriaNeural", "name": "Edge - Aria (Female)", "description": "US English, Female"},
+            {"id": "edge:en-US-GuyNeural", "name": "Edge - Guy (Male)", "description": "US English, Male"},
+            {"id": "edge:en-GB-LibbyNeural", "name": "Edge - Libby (Female)", "description": "UK English, Female"},
+            {"id": "edge:en-GB-RyanNeural", "name": "Edge - Ryan (Male)", "description": "UK English, Male"},
+            {"id": "edge:en-IN-NeerjaNeural", "name": "Edge - Neerja (Female)", "description": "Indian English, Female"},
+            {"id": "edge:en-IN-PrabhatNeural", "name": "Edge - Prabhat (Male)", "description": "Indian English, Male"},
+            {"id": "edge:en-AU-NatashaNeural", "name": "Edge - Natasha (Female)", "description": "Australian English, Female"},
+            {"id": "edge:en-AU-WilliamNeural", "name": "Edge - William (Male)", "description": "Australian English, Male"},
+            {"id": "edge:it-IT-ElsaNeural", "name": "Edge - Elsa (Female)", "description": "Italian, Female"},
+            {"id": "edge:it-IT-DiegoNeural", "name": "Edge - Diego (Male)", "description": "Italian, Male"},
         ]
     }
 
+
+
+# Default route serves speaking (conversation) mode
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+# /chat serves interactive chat UI
+@app.get("/chat", response_class=HTMLResponse)
+async def chat(request: Request):
+    return templates.TemplateResponse("index_interactive.html", {"request": request})
+
+# Serve the non-conversation chat UI
+@app.get("/chat", response_class=HTMLResponse)
+async def chat(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+# Serve the interactive conversation UI
+@app.get("/conversation", response_class=HTMLResponse)
+async def conversation(request: Request):
+    return templates.TemplateResponse("index_interactive.html", {"request": request})
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -289,6 +284,8 @@ async def upload_file(file: UploadFile = File(...)):
 # RAG endpoint
 @app.post("/ask")
 async def ask_question(request: Request, question: str = Form(...)):
+    import logging
+    start_time = time.time()
     if global_vector_store is None:
         return JSONResponse(content={"answer": "Upload documents first"}, status_code=400)
 
@@ -310,24 +307,35 @@ Answer:
     retrieval_chain = create_retrieval_chain(retriever, doc_chain)
 
     try:
+        t0 = time.time()
         result = await asyncio.to_thread(lambda: retrieval_chain.invoke({"input": question}))
+        t1 = time.time()
         answer = result.get("answer", "No answer found.")
+        logging.info(f"RAG response time: {t1-t0:.2f}s")
     except Exception as e:
         print("❌ Error:", e)
         answer = "An error occurred."
 
     audio_url = None
     try:
+        t2 = time.time()
         await edge_tts_to_file(answer, voice_id="en-US-AriaNeural")
+        t3 = time.time()
         audio_url = f"/static/output.mp3?nocache={int(time.time())}"
+        logging.info(f"Edge TTS time: {t3-t2:.2f}s")
     except Exception as tts_e:
         print("Edge TTS error:", tts_e)
         try:
+            t4 = time.time()
             await elevenlabs_tts_to_file(answer, voice_id="9BWtsMINqrJLrRacOk9x")
+            t5 = time.time()
             audio_url = f"/static/output.mp3?nocache={int(time.time())}"
+            logging.info(f"ElevenLabs TTS time: {t5-t4:.2f}s")
         except Exception as tts2_e:
             print("ElevenLabs TTS error:", tts2_e)
 
+    end_time = time.time()
+    logging.info(f"Total /ask endpoint time: {end_time-start_time:.2f}s")
     return JSONResponse(content={"answer": answer, "audio_url": audio_url})
 
 # -----------------------------
@@ -405,10 +413,22 @@ Answer:
                 session.add("assistant", ai_response)
                 audio_url = None
                 voice_id = session.voice_settings.get("voice_id", "9BWtsMINqrJLrRacOk9x")
+                speed = session.voice_settings.get("speed", 1.0)
+                # Convert speed to Edge TTS rate string
+                try:
+                    speed_float = float(speed)
+                    if speed_float == 1.0:
+                        rate_str = "+0%"
+                    else:
+                        rate_percent = int((speed_float - 1.0) * 100)
+                        rate_str = f"{rate_percent:+d}%"
+                except Exception:
+                    rate_str = "+0%"
+
                 if voice_id.startswith("edge:"):
                     try:
                         edge_voice = voice_id.split(":", 1)[1]
-                        await edge_tts_to_file(ai_response, voice_id=edge_voice)
+                        await edge_tts_to_file(ai_response, voice_id=edge_voice, rate=rate_str)
                         audio_url = f"/static/output.mp3?nocache={int(time.time())}"
                     except Exception as tts_e:
                         print("Edge TTS error:", tts_e)
