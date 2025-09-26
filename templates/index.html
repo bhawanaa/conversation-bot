@@ -1053,9 +1053,14 @@
                     handleWebSocketMessage(data);
                 };
 
+
                 ws.onclose = function () {
                     console.log('❌ Conversation WebSocket disconnected');
-                    updateStatus('❌ Disconnected. Please refresh.', 'error');
+                    updateStatus('❌ Disconnected. Reconnecting...', 'error');
+                    // Try to reconnect after 2 seconds
+                    setTimeout(() => {
+                        connectWebSocket();
+                    }, 2000);
                 };
 
                 ws.onerror = function (error) {
