@@ -190,7 +190,7 @@ class ConversationSession:
 
 conversation_sessions = {}
 
-async def _ws_keepalive(ws: WebSocket, interval: int = 20):
+async def _ws_keepalive(ws: WebSocket, interval: int = 10):
     try:
         while True:
             await asyncio.sleep(interval)
@@ -357,24 +357,38 @@ async def ws_conversation(websocket: WebSocket):
 
     try:
         while True:
-            raw = await websocket.receive_text()
+            try:
+                raw = await websocket.receive_text()
+            except Exception:
+                # Connection closed or error receiving
+                break
             try:
                 msg = json.loads(raw)
             except Exception:
-                await websocket.send_json({"type": "error", "content": "Invalid JSON"})
+                try:
+                    await websocket.send_json({"type": "error", "content": "Invalid JSON"})
+                except Exception:
+                    # Don't write after close
+                    break
                 continue
 
             mtype = msg.get("type")
             if mtype == "voice_input":
                 user_message = msg.get("content", "").strip()
                 if not user_message:
-                    await websocket.send_json({"type": "error", "content": "Empty message"})
+                    try:
+                        await websocket.send_json({"type": "error", "content": "Empty message"})
+                    except Exception:
+                        break
                     continue
 
                 session.voice_settings.update(msg.get("voice_settings", {}))
                 session.add("user", user_message)
 
-                await websocket.send_json({"type": "processing", "message": "🤔 Thinking..."})
+                try:
+                    await websocket.send_json({"type": "processing", "message": "🤔 Thinking..."})
+                except Exception:
+                    break
 
                 context_prompt = (
                     "You are an intelligent, friendly assistant. "
